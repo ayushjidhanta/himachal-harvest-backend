@@ -10,9 +10,11 @@ configureMongoDB();
 configureMiddleware(app);
 configureRoutes(app);
 
-const port = process.env.REACT_PORT || 5005;
-app.listen(port, () => {
-  console.log(`---> 🚀 App Is Up And Running On Port ${port}!`);
-});
+if (process.env.REACT_ENV === "dev") {
+  const port = process.env.REACT_PORT || 5005;
+  app.listen(port, () => {
+    console.log(`---> 🚀 App Is Up And Running On Port ${port}!`);
+  });
+}
 
-module.exports = app;
+export default app;
