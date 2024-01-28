@@ -1,1 +1,1 @@
-# himachal-harvest-backend
+# Himachal Harvest Backend
