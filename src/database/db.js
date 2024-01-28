@@ -10,6 +10,8 @@ const PASSWORD = process.env.REACT_MONGO_PASSWORD;
 
 export const configureMongoDB = () => {
   try {
+    console.log("---> 🌐 Connecting to MongoDB...");
+    console.log("---> 🌐 Username: ", USERNAME);
     connect(
       `mongodb+srv://${USERNAME}:${PASSWORD}@demo.ai1hmta.mongodb.net/?retryWrites=true&w=majority`
     );
