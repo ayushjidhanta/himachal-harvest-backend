@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import Admin from "../model/admin-schema.js";
 import User from "../model/userSchema.js";
 
 // Function to create a new user
@@ -6,12 +7,12 @@ export const signUp = async (req, res) => {
   try {
     // Check if the user limit has been reached
     let current_users = await User.countDocuments();
-    if (current_users > 10) {
-      return res.status(200).json({
-        message: "Maximum Users Limit Reached",
-        user_created: false,
-      });
-    }
+    // if (current_users > 10) {
+    //   return res.status(200).json({
+    //     message: "Maximum Users Limit Reached",
+    //     user_created: false,
+    //   });
+    // }
 
     // Check if the user already exists
     let user_exist = await User.findOne({ username: req.body.username });
@@ -23,11 +24,13 @@ export const signUp = async (req, res) => {
     }
 
     let username = req.body.username;
+    let email = req.body.email;
     let password = await bcrypt.hash(req.body.password, 10); // Hash the password
 
     // user does not exist, create a new user
     let user = await User.create({
       username: username,
+      email: email,
       password: password,
     });
 
@@ -48,6 +51,7 @@ export const signIn = async (req, res) => {
   try {
     // Check if the user exists
     let user = await User.findOne({ username: req.body.username });
+
     if (!user) {
       return res.status(200).json({
         message: "User Does Not Exist",
@@ -56,7 +60,7 @@ export const signIn = async (req, res) => {
     }
 
     // Check if the password is correct
-    bcrypt.compare(req.body.password, user.password, (err, result) => {
+    bcrypt.compare(req.body.password, user.password, async (err, result) => {
       if (err) {
         return res.status(200).json({
           message: err,
@@ -64,10 +68,20 @@ export const signIn = async (req, res) => {
         });
       }
       if (result) {
-        return res.status(200).json({
-          message: "User Authenticated Successfully",
-          user_authenticated: true,
-        });
+        const admin = await Admin.findOne({ username: req.body.username });
+        if (admin) {
+          return res.status(200).json({
+            message: "Admin Authenticated Successfully",
+            user_authenticated: true,
+            role: admin.isAdmin,
+          });
+        } else {
+          return res.status(200).json({
+            message: "User Authenticated Successfully",
+            user_authenticated: true,
+            role: "User",
+          });
+        }
       } else {
         return res.status(200).json({
           message: "Invalid Credentials",
