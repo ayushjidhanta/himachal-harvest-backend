@@ -20,4 +20,4 @@ const productSchema = new mongoose.Schema({
 
 // product in parameter is database name inside monogodb
 const Product = mongoose.model("product", productSchema);
-export default Product;
+export default Product;

@@ -2,7 +2,7 @@ import contactUs from "../model/contactUs-schema.js";
 export const contactFormData = async (req, res) => {
    try 
    {
-      const newForm = contactUs.create({
+      await contactUs.create({
         fullname: req.body.fullName,
         email: req.body.email,
         message: req.body.message
