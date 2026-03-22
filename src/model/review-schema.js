@@ -9,6 +9,12 @@ const reviewSchema = {
         type: String,
         required: true,
     },
+    rating: {
+        type: Number,
+        min: 1,
+        max: 5,
+        required: false,
+    },
     date: {
         type: Date,
         required: true,

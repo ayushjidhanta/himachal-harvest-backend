@@ -25,6 +25,11 @@ const orderSchema = new mongoose.Schema(
       state: { type: String, required: true },
       zip: { type: String, required: true },
     },
+    deliveryLocation: {
+      lat: { type: Number, required: false },
+      lng: { type: Number, required: false },
+      accuracy: { type: Number, required: false },
+    },
     items: { type: [orderItemSchema], required: true },
     totals: {
       subtotal: { type: Number, required: true },
@@ -40,6 +45,21 @@ const orderSchema = new mongoose.Schema(
       carrier: { type: String, required: false },
       trackingNumber: { type: String, required: false },
       trackingUrl: { type: String, required: false },
+    },
+    deliveryPartner: {
+      name: { type: String, required: false },
+      phone: { type: String, required: false },
+      whatsapp: { type: String, required: false },
+    },
+    deliveryShareToken: { type: String, required: false, unique: true, sparse: true, index: true },
+    deliveryUpdateToken: { type: String, required: false, unique: true, sparse: true, index: true },
+    shipment: {
+      lastKnownLocation: {
+        lat: { type: Number, required: false },
+        lng: { type: Number, required: false },
+      },
+      lastKnownText: { type: String, required: false },
+      updatedAt: { type: Date, required: false },
     },
     adminNotes: { type: String, required: false },
   },
