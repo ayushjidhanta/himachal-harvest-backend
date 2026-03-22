@@ -1,9 +1,12 @@
-export const requireAdminKey = (req, res, next) => {
+export const isAdminKeyValid = (req) => {
   const required = process.env.ADMIN_API_KEY;
-  if (!required) return next();
+  if (!required) return true;
+  const provided = req?.get?.("x-admin-key");
+  return Boolean(provided && provided === required);
+};
 
-  const provided = req.get("x-admin-key");
-  if (!provided || provided !== required) {
+export const requireAdminKey = (req, res, next) => {
+  if (!isAdminKeyValid(req)) {
     return res.status(403).json({ ok: false, error: { message: "Forbidden" } });
   }
 

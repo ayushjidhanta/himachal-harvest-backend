@@ -68,19 +68,15 @@ export const signIn = async (req, res) => {
       }
       if (result) {
         const admin = await Admin.findOne({ username: req.body.username });
-        if (admin) {
-          return res.status(200).json({
-            message: "Admin Authenticated Successfully",
-            user_authenticated: true,
-            role: admin.isAdmin,
-          });
-        } else {
-          return res.status(200).json({
-            message: "User Authenticated Successfully",
-            user_authenticated: true,
-            role: "User",
-          });
-        }
+        const storedRole = typeof user?.role === "string" ? user.role : "";
+        const resolvedRole = storedRole.trim().length ? storedRole : (admin ? "Admin" : "User");
+        const message = resolvedRole === "Admin" ? "Admin Authenticated Successfully" : "User Authenticated Successfully";
+        return res.status(200).json({
+          message,
+          user_authenticated: true,
+          role: resolvedRole,
+          user: { username: user.username, email: user.email, role: resolvedRole },
+        });
       } else {
         return res.status(200).json({
           message: "Invalid Credentials",

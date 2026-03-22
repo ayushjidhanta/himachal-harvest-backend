@@ -2,11 +2,15 @@ import { v4 as uuidv4 } from "uuid";
 import Order from "../model/order-schema.js";
 import Product from "../model/product-schema.js";
 import { sendOrderNotificationEmail } from "../services/emailService.js";
+import { isAdminKeyValid } from "../utils/requireAdminKey.js";
 import { asTrimmedString, badRequest, isNonEmptyString, isPositiveInt, isValidEmail } from "../utils/validation.js";
+
+const isFiniteNumber = (v) => typeof v === "number" && Number.isFinite(v);
 
 const buildOrderFromRequest = async (payload) => {
   const customer = payload?.customer ?? {};
   const shippingAddress = payload?.shippingAddress ?? {};
+  const deliveryLocation = payload?.deliveryLocation ?? undefined;
   const items = Array.isArray(payload?.items) ? payload.items : [];
 
   const firstName = asTrimmedString(customer.firstName);
@@ -27,6 +31,19 @@ const buildOrderFromRequest = async (payload) => {
   if (!isNonEmptyString(city)) return { error: "shippingAddress.city is required" };
   if (!isNonEmptyString(state)) return { error: "shippingAddress.state is required" };
   if (!isNonEmptyString(zip)) return { error: "shippingAddress.zip is required" };
+
+  let normalizedDeliveryLocation = undefined;
+  if (deliveryLocation !== undefined && deliveryLocation !== null) {
+    const lat = Number(deliveryLocation?.lat);
+    const lng = Number(deliveryLocation?.lng);
+    const accuracy = deliveryLocation?.accuracy === undefined ? undefined : Number(deliveryLocation?.accuracy);
+
+    if (!isFiniteNumber(lat) || lat < -90 || lat > 90) return { error: "deliveryLocation.lat must be between -90 and 90" };
+    if (!isFiniteNumber(lng) || lng < -180 || lng > 180) return { error: "deliveryLocation.lng must be between -180 and 180" };
+    if (accuracy !== undefined && (!isFiniteNumber(accuracy) || accuracy < 0)) return { error: "deliveryLocation.accuracy must be a number >= 0" };
+
+    normalizedDeliveryLocation = { lat, lng, accuracy };
+  }
 
   if (items.length === 0) return { error: "items must be a non-empty array" };
 
@@ -60,6 +77,7 @@ const buildOrderFromRequest = async (payload) => {
     orderId: uuidv4(),
     customer: { firstName, lastName, email, phone: phone || undefined },
     shippingAddress: { addressLine1, city, state, zip },
+    deliveryLocation: normalizedDeliveryLocation,
     items: orderItems,
     totals: { subtotal, total: subtotal },
     status: "created",
@@ -103,8 +121,18 @@ export const getOrderById = async (req, res) => {
     const orderId = asTrimmedString(req.params.orderId);
     if (!isNonEmptyString(orderId)) return badRequest(res, "orderId is required");
 
-    const order = await Order.findOne({ orderId }).lean();
+    const order = await Order.findOne({ orderId }).select("-deliveryUpdateToken").lean();
     if (!order) return res.status(404).json({ ok: false, error: { message: "Order not found" } });
+
+    if (isAdminKeyValid(req)) {
+      return res.status(200).json({ ok: true, data: order });
+    }
+
+    const email = asTrimmedString(req.query.email);
+    if (!isValidEmail(email)) return badRequest(res, "email query param must be a valid email");
+    if (String(order?.customer?.email || "").toLowerCase() !== email.toLowerCase()) {
+      return res.status(403).json({ ok: false, error: { message: "Forbidden" } });
+    }
 
     return res.status(200).json({ ok: true, data: order });
   } catch (error) {
@@ -117,7 +145,7 @@ export const getOrdersByEmail = async (req, res) => {
     const email = asTrimmedString(req.query.email);
     if (!isValidEmail(email)) return badRequest(res, "email query param must be a valid email");
 
-    const orders = await Order.find({ "customer.email": email }).sort({ createdAt: -1 }).lean();
+    const orders = await Order.find({ "customer.email": email }).select("-deliveryUpdateToken").sort({ createdAt: -1 }).lean();
     return res.status(200).json({ ok: true, data: orders });
   } catch (error) {
     return res.status(500).json({ ok: false, error: { message: error?.message ?? "Internal Server Error" } });
@@ -139,32 +167,137 @@ export const updateOrderAdmin = async (req, res) => {
     if (!isNonEmptyString(orderId)) return badRequest(res, "orderId is required");
 
     const payload = req.body ?? {};
-    const update = {};
+    const setUpdate = {};
+    const unsetUpdate = {};
 
     if (payload.status !== undefined) {
       const status = asTrimmedString(payload.status);
       const allowed = new Set(["created", "confirmed", "dispatched", "out_for_delivery", "delivered", "cancelled"]);
       if (!allowed.has(status)) return badRequest(res, "Invalid status");
-      update.status = status;
+      setUpdate.status = status;
     }
 
     if (payload.tracking !== undefined) {
       const tracking = payload.tracking ?? {};
-      update.tracking = {
+      setUpdate.tracking = {
         carrier: asTrimmedString(tracking.carrier) || undefined,
         trackingNumber: asTrimmedString(tracking.trackingNumber) || undefined,
         trackingUrl: asTrimmedString(tracking.trackingUrl) || undefined,
       };
     }
 
-    if (payload.adminNotes !== undefined) update.adminNotes = asTrimmedString(payload.adminNotes) || undefined;
+    if (payload.deliveryPartner !== undefined) {
+      const dp = payload.deliveryPartner ?? {};
+      const name = asTrimmedString(dp.name) || undefined;
+      const phone = asTrimmedString(dp.phone) || undefined;
+      const whatsapp = asTrimmedString(dp.whatsapp) || undefined;
 
-    if (Object.keys(update).length === 0) return badRequest(res, "No updatable fields provided");
+      setUpdate.deliveryPartner = { name, phone, whatsapp };
 
-    const updated = await Order.findOneAndUpdate({ orderId }, { $set: update }, { new: true }).lean();
+      if (dp.generateShareToken === true) {
+        setUpdate.deliveryShareToken = uuidv4();
+        setUpdate.deliveryUpdateToken = uuidv4();
+      } else if (dp.clearShareToken === true) {
+        unsetUpdate.deliveryShareToken = "";
+        unsetUpdate.deliveryUpdateToken = "";
+      }
+    }
+
+    if (payload.shipment !== undefined) {
+      const shipment = payload.shipment ?? {};
+      const loc = shipment.lastKnownLocation ?? shipment.location ?? {};
+      const lat = loc.lat === undefined ? undefined : Number(loc.lat);
+      const lng = loc.lng === undefined ? undefined : Number(loc.lng);
+
+      if (lat !== undefined && (!isFiniteNumber(lat) || lat < -90 || lat > 90)) return badRequest(res, "shipment.lastKnownLocation.lat must be between -90 and 90");
+      if (lng !== undefined && (!isFiniteNumber(lng) || lng < -180 || lng > 180)) return badRequest(res, "shipment.lastKnownLocation.lng must be between -180 and 180");
+
+      setUpdate.shipment = {
+        lastKnownLocation:
+          lat !== undefined && lng !== undefined ? { lat, lng } : undefined,
+        lastKnownText: asTrimmedString(shipment.lastKnownText ?? shipment.text) || undefined,
+        updatedAt: new Date(),
+      };
+    }
+
+    if (payload.adminNotes !== undefined) setUpdate.adminNotes = asTrimmedString(payload.adminNotes) || undefined;
+
+    if (Object.keys(setUpdate).length === 0 && Object.keys(unsetUpdate).length === 0) return badRequest(res, "No updatable fields provided");
+
+    const updateDoc = {};
+    if (Object.keys(setUpdate).length) updateDoc.$set = setUpdate;
+    if (Object.keys(unsetUpdate).length) updateDoc.$unset = unsetUpdate;
+
+    const updated = await Order.findOneAndUpdate({ orderId }, updateDoc, { new: true }).lean();
     if (!updated) return res.status(404).json({ ok: false, error: { message: "Order not found" } });
 
     return res.status(200).json({ ok: true, data: updated });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: { message: error?.message ?? "Internal Server Error" } });
+  }
+};
+
+export const getOrderTrackingByToken = async (req, res) => {
+  try {
+    const token = asTrimmedString(req.params.token);
+    if (!isNonEmptyString(token)) return badRequest(res, "token is required");
+
+    const order = await Order.findOne({ $or: [{ deliveryShareToken: token }, { deliveryUpdateToken: token }] }).lean();
+    if (!order) return res.status(404).json({ ok: false, error: { message: "Tracking link not found" } });
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        orderId: order.orderId,
+        status: order.status,
+        shipment: order.shipment,
+        deliveryPartner: order.deliveryPartner,
+        updatedAt: order.updatedAt,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: { message: error?.message ?? "Internal Server Error" } });
+  }
+};
+
+export const updateShipmentByToken = async (req, res) => {
+  try {
+    const token = asTrimmedString(req.params.token);
+    if (!isNonEmptyString(token)) return badRequest(res, "token is required");
+
+    const payload = req.body ?? {};
+    const lat = payload.lat === undefined ? undefined : Number(payload.lat);
+    const lng = payload.lng === undefined ? undefined : Number(payload.lng);
+    const accuracy = payload.accuracy === undefined ? undefined : Number(payload.accuracy);
+    const text = asTrimmedString(payload.text ?? payload.lastKnownText) || undefined;
+
+    if (!isFiniteNumber(lat) || lat < -90 || lat > 90) return badRequest(res, "lat must be between -90 and 90");
+    if (!isFiniteNumber(lng) || lng < -180 || lng > 180) return badRequest(res, "lng must be between -180 and 180");
+    if (accuracy !== undefined && (!isFiniteNumber(accuracy) || accuracy < 0)) return badRequest(res, "accuracy must be a number >= 0");
+
+    const updateDoc = {
+      $set: {
+        "shipment.lastKnownLocation": { lat, lng },
+        "shipment.lastKnownText": text,
+        "shipment.updatedAt": new Date(),
+      },
+    };
+
+    const updated = await Order.findOneAndUpdate({ deliveryUpdateToken: token }, updateDoc, { new: true }).lean();
+    if (!updated) {
+      const legacy = await Order.findOne({ deliveryShareToken: token }).lean();
+      if (!legacy) return res.status(404).json({ ok: false, error: { message: "Tracking link not found" } });
+      return res.status(403).json({ ok: false, error: { message: "This tracking link is view-only" } });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        orderId: updated.orderId,
+        status: updated.status,
+        shipment: updated.shipment,
+      },
+    });
   } catch (error) {
     return res.status(500).json({ ok: false, error: { message: error?.message ?? "Internal Server Error" } });
   }
