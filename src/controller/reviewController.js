@@ -1,7 +1,7 @@
 import review from "../model/review-schema.js";
 export const addReview = async (req, res) => {
     try {
-        const newReview = review.create({
+        await review.create({
             name: req.body.reviewName,
             discription: req.body.reviewDescription,
             date: req.body.reviewDate

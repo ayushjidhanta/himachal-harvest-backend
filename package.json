@@ -6,7 +6,6 @@
   "scripts": {
     "start": "nodemon server.js"
   },
-  "keywords": [],
   "author": "Ayush, Abhishek, Bhupender",
   "license": "ISC",
   "dependencies": {
