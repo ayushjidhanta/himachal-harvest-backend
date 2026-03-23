@@ -1,7 +1,18 @@
 import User from "../model/userSchema.js";
 import { asTrimmedString, badRequest, isNonEmptyString } from "../utils/validation.js";
 
-const ALLOWED_ROLES = new Set(["User", "Partner", "Admin"]);
+const ALLOWED_ROLES = new Set(["User", "Manager", "Admin"]);
+
+const normalizeRole = (role) => {
+  const r = asTrimmedString(role);
+  if (!isNonEmptyString(r)) return "";
+  const key = r.toLowerCase();
+  if (key === "partner") return "Manager";
+  if (key === "manager") return "Manager";
+  if (key === "admin") return "Admin";
+  if (key === "user") return "User";
+  return r;
+};
 
 export const listUsers = async (req, res) => {
   try {
@@ -20,8 +31,8 @@ export const setUserRole = async (req, res) => {
     const username = asTrimmedString(req.params.username);
     if (!isNonEmptyString(username)) return badRequest(res, "username param is required");
 
-    const role = asTrimmedString(req.body?.role);
-    if (!ALLOWED_ROLES.has(role)) return badRequest(res, "role must be one of User, Partner, Admin");
+    const role = normalizeRole(req.body?.role);
+    if (!ALLOWED_ROLES.has(role)) return badRequest(res, "role must be one of User, Manager, Admin");
 
     const updated = await User.findOneAndUpdate(
       { username },
@@ -37,4 +48,3 @@ export const setUserRole = async (req, res) => {
     return res.status(500).json({ ok: false, error: { message: error?.message ?? "Internal Server Error" } });
   }
 };
-
