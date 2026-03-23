@@ -2,6 +2,17 @@ import bcrypt from "bcryptjs";
 import Admin from "../model/admin-schema.js";
 import User from "../model/userSchema.js";
 
+const normalizeRole = (role, isAdminUser) => {
+  const raw = typeof role === "string" ? role.trim() : "";
+  if (!raw) return isAdminUser ? "Admin" : "User";
+  const key = raw.toLowerCase();
+  if (key === "partner") return "Manager";
+  if (key === "manager") return "Manager";
+  if (key === "admin") return "Admin";
+  if (key === "user") return "User";
+  return isAdminUser ? "Admin" : "User";
+};
+
 // Function to create a new user
 export const signUp = async (req, res) => {
   try {
@@ -68,9 +79,18 @@ export const signIn = async (req, res) => {
       }
       if (result) {
         const admin = await Admin.findOne({ username: req.body.username });
-        const storedRole = typeof user?.role === "string" ? user.role : "";
-        const resolvedRole = storedRole.trim().length ? storedRole : (admin ? "Admin" : "User");
-        const message = resolvedRole === "Admin" ? "Admin Authenticated Successfully" : "User Authenticated Successfully";
+        const resolvedRole = normalizeRole(user?.role, Boolean(admin));
+
+        if (String(user?.role || "").trim().toLowerCase() === "partner") {
+          User.updateOne({ _id: user._id }, { $set: { role: "Manager" } }).catch(() => {});
+        }
+
+        const message =
+          resolvedRole === "Admin"
+            ? "Admin Authenticated Successfully"
+            : resolvedRole === "Manager"
+              ? "Manager Authenticated Successfully"
+              : "User Authenticated Successfully";
         return res.status(200).json({
           message,
           user_authenticated: true,
