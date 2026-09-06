@@ -8,6 +8,8 @@ import { isAdminKeyValid } from "../utils/requireAdminKey.js";
 import { asTrimmedString, badRequest, isNonEmptyString, isPositiveInt, isValidEmail } from "../utils/validation.js";
 import { ORDER_STATUS, ORDER_STATUS_VALUES } from "../constants/orderStatus.js";
 import { USER_ROLE } from "../constants/userRole.js";
+import { MANAGER_PERMISSION } from "../constants/managerPermission.js";
+import { assertOperationPermission } from "../utils/requireOperationsAccess.js";
 
 const isFiniteNumber = (v) => typeof v === "number" && Number.isFinite(v);
 
@@ -187,6 +189,16 @@ export const updateOrderAdmin = async (req, res) => {
     if (!isNonEmptyString(orderId)) return badRequest(res, "orderId is required");
 
     const payload = req.body ?? {};
+    if (payload.status !== undefined && !assertOperationPermission(req, MANAGER_PERMISSION.UPDATE_ORDER_STATUS)) {
+      return res.status(403).json({ ok: false, error: { message: "You do not have permission to update order status" } });
+    }
+    if (payload.deliveryPartner !== undefined && !assertOperationPermission(req, MANAGER_PERMISSION.ASSIGN_DELIVERY_PARTNER)) {
+      return res.status(403).json({ ok: false, error: { message: "You do not have permission to manage delivery partners" } });
+    }
+    if ((payload.tracking !== undefined || payload.shipment !== undefined || payload.adminNotes !== undefined)
+      && !assertOperationPermission(req, MANAGER_PERMISSION.UPDATE_ORDER_STATUS)) {
+      return res.status(403).json({ ok: false, error: { message: "You do not have permission to update order operations" } });
+    }
     const setUpdate = {};
     const unsetUpdate = {};
 
