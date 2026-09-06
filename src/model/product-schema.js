@@ -16,7 +16,7 @@ const productSchema = new mongoose.Schema({
   discount: String,
   tagline: String,
   seller: String,
-});
+}, { timestamps: true });
 
 // product in parameter is database name inside monogodb
 const Product = mongoose.model("product", productSchema);

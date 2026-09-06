@@ -1,11 +1,15 @@
 import { v4 as uuidv4 } from "uuid";
 import Product from "../model/product-schema.js";
 import { asTrimmedString, badRequest, isNonEmptyString } from "../utils/validation.js";
+import { getProductCatalog, invalidateProductCatalog } from "../services/productCatalogCache.js";
 
 export const getProducts = async (req, res) => {
   try {
-    const data = await Product.find({});
-    res.status(200).json(data);
+    const { data, etag } = await getProductCatalog();
+    res.set("ETag", etag);
+    res.set("Cache-Control", "private, max-age=0, must-revalidate");
+    if (req.get("If-None-Match") === etag) return res.status(304).end();
+    return res.status(200).json(data);
   } catch (error) {
     res.status(500).json({ message: error?.message ?? "Internal Server Error" });
   }
@@ -70,6 +74,7 @@ export const createProduct = async (req, res) => {
       tagline,
       seller,
     });
+    invalidateProductCatalog();
 
     return res.status(201).json({ ok: true, data: created });
   } catch (error) {
@@ -132,6 +137,7 @@ export const updateProductById = async (req, res) => {
 
     const updated = await Product.findOneAndUpdate({ id }, { $set: update }, { new: true });
     if (!updated) return res.status(404).json({ ok: false, error: { message: "Product not found" } });
+    invalidateProductCatalog();
 
     return res.status(200).json({ ok: true, data: updated });
   } catch (error) {
