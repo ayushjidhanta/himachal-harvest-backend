@@ -1,9 +1,13 @@
 import { v4 as uuidv4 } from "uuid";
 import Order from "../model/order-schema.js";
 import Product from "../model/product-schema.js";
+import User from "../model/userSchema.js";
 import { sendOrderNotificationEmail } from "../services/emailService.js";
+import { getAdminOrders, invalidateAdminOrders } from "../services/adminOrderCache.js";
 import { isAdminKeyValid } from "../utils/requireAdminKey.js";
 import { asTrimmedString, badRequest, isNonEmptyString, isPositiveInt, isValidEmail } from "../utils/validation.js";
+import { ORDER_STATUS, ORDER_STATUS_VALUES } from "../constants/orderStatus.js";
+import { USER_ROLE } from "../constants/userRole.js";
 
 const isFiniteNumber = (v) => typeof v === "number" && Number.isFinite(v);
 
@@ -80,7 +84,7 @@ const buildOrderFromRequest = async (payload) => {
     deliveryLocation: normalizedDeliveryLocation,
     items: orderItems,
     totals: { subtotal, total: subtotal },
-    status: "created",
+    status: ORDER_STATUS.CREATED,
   };
 };
 
@@ -90,6 +94,7 @@ export const createOrder = async (req, res) => {
     if (built?.error) return badRequest(res, built.error, built.details);
 
     const order = await Order.create(built);
+    invalidateAdminOrders();
     const notificationsTo = process.env.ORDER_NOTIFICATIONS_TO || "";
 
     let emailNotification = { sent: false, reason: "Not requested" };
@@ -152,10 +157,25 @@ export const getOrdersByEmail = async (req, res) => {
   }
 };
 
+export const getAssignedOrdersForPartner = async (req, res) => {
+  try {
+    const orders = await Order.find({ "deliveryPartner.userId": req.auth.sub })
+      .select("orderId customer shippingAddress items totals status tracking shipment deliveryLocation deliveryUpdateToken createdAt updatedAt")
+      .sort({ createdAt: -1 })
+      .lean();
+    return res.status(200).json({ ok: true, data: orders });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: { message: error?.message ?? "Internal Server Error" } });
+  }
+};
+
 export const getAllOrdersAdmin = async (req, res) => {
   try {
-    const orders = await Order.find({}).sort({ createdAt: -1 }).lean();
-    return res.status(200).json({ ok: true, data: orders });
+    const { data, etag } = await getAdminOrders();
+    res.set("ETag", etag);
+    res.set("Cache-Control", "private, max-age=0, must-revalidate");
+    if (req.get("If-None-Match") === etag) return res.status(304).end();
+    return res.status(200).json({ ok: true, data });
   } catch (error) {
     return res.status(500).json({ ok: false, error: { message: error?.message ?? "Internal Server Error" } });
   }
@@ -172,7 +192,7 @@ export const updateOrderAdmin = async (req, res) => {
 
     if (payload.status !== undefined) {
       const status = asTrimmedString(payload.status);
-      const allowed = new Set(["created", "confirmed", "dispatched", "out_for_delivery", "delivered", "cancelled"]);
+      const allowed = new Set(ORDER_STATUS_VALUES);
       if (!allowed.has(status)) return badRequest(res, "Invalid status");
       setUpdate.status = status;
     }
@@ -188,11 +208,40 @@ export const updateOrderAdmin = async (req, res) => {
 
     if (payload.deliveryPartner !== undefined) {
       const dp = payload.deliveryPartner ?? {};
-      const name = asTrimmedString(dp.name) || undefined;
-      const phone = asTrimmedString(dp.phone) || undefined;
-      const whatsapp = asTrimmedString(dp.whatsapp) || undefined;
+      const needsAssignedPartner = dp.generateShareToken === true;
+      let existingOrder = null;
+      if (needsAssignedPartner && dp.userId === undefined) {
+        existingOrder = await Order.findOne({ orderId }).select("deliveryPartner.userId").lean();
+        if (!existingOrder) return res.status(404).json({ ok: false, error: { message: "Order not found" } });
+        if (!existingOrder?.deliveryPartner?.userId) {
+          return badRequest(res, "Assign a Delivery Partner in Orders before generating delivery links");
+        }
+      }
 
-      setUpdate.deliveryPartner = { name, phone, whatsapp };
+      if (dp.userId !== undefined) {
+        const partnerId = asTrimmedString(dp.userId);
+        if (!partnerId) {
+          unsetUpdate["deliveryPartner.userId"] = "";
+          unsetUpdate["deliveryPartner.username"] = "";
+        } else {
+          const partner = await User.findOne({ _id: partnerId, role: USER_ROLE.DELIVERY_PARTNER })
+            .select("_id username")
+            .lean();
+          if (!partner) return badRequest(res, "Selected user is not an active Delivery Partner");
+          setUpdate["deliveryPartner.userId"] = partner._id;
+          setUpdate["deliveryPartner.username"] = partner.username;
+          // A readable snapshot keeps historical order views useful if the username changes later.
+          setUpdate["deliveryPartner.name"] = partner.username;
+        }
+      }
+
+      if (needsAssignedPartner && !dp.userId && !existingOrder?.deliveryPartner?.userId) {
+        return badRequest(res, "Assign a Delivery Partner in Orders before generating delivery links");
+      }
+
+      if (dp.name !== undefined) setUpdate["deliveryPartner.name"] = asTrimmedString(dp.name) || undefined;
+      if (dp.phone !== undefined) setUpdate["deliveryPartner.phone"] = asTrimmedString(dp.phone) || undefined;
+      if (dp.whatsapp !== undefined) setUpdate["deliveryPartner.whatsapp"] = asTrimmedString(dp.whatsapp) || undefined;
 
       if (dp.generateShareToken === true) {
         setUpdate.deliveryShareToken = uuidv4();
@@ -230,6 +279,7 @@ export const updateOrderAdmin = async (req, res) => {
 
     const updated = await Order.findOneAndUpdate({ orderId }, updateDoc, { new: true }).lean();
     if (!updated) return res.status(404).json({ ok: false, error: { message: "Order not found" } });
+    invalidateAdminOrders();
 
     return res.status(200).json({ ok: true, data: updated });
   } catch (error) {
@@ -251,6 +301,8 @@ export const getOrderTrackingByToken = async (req, res) => {
         orderId: order.orderId,
         status: order.status,
         shipment: order.shipment,
+        deliveryLocation: order.deliveryLocation,
+        shippingAddress: order.shippingAddress,
         deliveryPartner: order.deliveryPartner,
         updatedAt: order.updatedAt,
       },
@@ -289,6 +341,7 @@ export const updateShipmentByToken = async (req, res) => {
       if (!legacy) return res.status(404).json({ ok: false, error: { message: "Tracking link not found" } });
       return res.status(403).json({ ok: false, error: { message: "This tracking link is view-only" } });
     }
+    invalidateAdminOrders();
 
     return res.status(200).json({
       ok: true,

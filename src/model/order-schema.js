@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { ORDER_STATUS, ORDER_STATUS_VALUES } from "../constants/orderStatus.js";
 
 const orderItemSchema = new mongoose.Schema(
   {
@@ -37,8 +38,8 @@ const orderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["created", "confirmed", "dispatched", "out_for_delivery", "delivered", "cancelled"],
-      default: "created",
+      enum: ORDER_STATUS_VALUES,
+      default: ORDER_STATUS.CREATED,
       required: true,
     },
     tracking: {
@@ -47,6 +48,8 @@ const orderSchema = new mongoose.Schema(
       trackingUrl: { type: String, required: false },
     },
     deliveryPartner: {
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: "user", required: false, index: true },
+      username: { type: String, required: false },
       name: { type: String, required: false },
       phone: { type: String, required: false },
       whatsapp: { type: String, required: false },

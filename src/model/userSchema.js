@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import { USER_ROLE, USER_ROLE_VALUES } from "../constants/userRole.js";
+import { MANAGER_PERMISSION_VALUES } from "../constants/managerPermission.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -20,9 +22,13 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["User", "Manager", "Admin"],
-      default: "User",
+      enum: USER_ROLE_VALUES,
+      default: USER_ROLE.USER,
       required: true,
+    },
+    permissions: {
+      type: [{ type: String, enum: MANAGER_PERMISSION_VALUES }],
+      default: [],
     },
   },
   { timestamps: true }

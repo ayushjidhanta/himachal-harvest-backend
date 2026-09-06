@@ -1,16 +1,18 @@
 import bcrypt from "bcryptjs";
 import Admin from "../model/admin-schema.js";
 import User from "../model/userSchema.js";
+import { USER_ROLE } from "../constants/userRole.js";
+import { createAccessToken } from "../utils/authToken.js";
 
 const normalizeRole = (role, isAdminUser) => {
   const raw = typeof role === "string" ? role.trim() : "";
-  if (!raw) return isAdminUser ? "Admin" : "User";
+  if (!raw) return isAdminUser ? USER_ROLE.ADMIN : USER_ROLE.USER;
   const key = raw.toLowerCase();
-  if (key === "partner") return "Manager";
-  if (key === "manager") return "Manager";
-  if (key === "admin") return "Admin";
-  if (key === "user") return "User";
-  return isAdminUser ? "Admin" : "User";
+  if (key === "partner" || key === "deliverypartner" || key === "delivery_partner") return USER_ROLE.DELIVERY_PARTNER;
+  if (key === "manager") return USER_ROLE.MANAGER;
+  if (key === "admin") return USER_ROLE.ADMIN;
+  if (key === "user") return USER_ROLE.USER;
+  return isAdminUser ? USER_ROLE.ADMIN : USER_ROLE.USER;
 };
 
 // Function to create a new user
@@ -81,21 +83,20 @@ export const signIn = async (req, res) => {
         const admin = await Admin.findOne({ username: req.body.username });
         const resolvedRole = normalizeRole(user?.role, Boolean(admin));
 
-        if (String(user?.role || "").trim().toLowerCase() === "partner") {
-          User.updateOne({ _id: user._id }, { $set: { role: "Manager" } }).catch(() => {});
-        }
-
         const message =
-          resolvedRole === "Admin"
+          resolvedRole === USER_ROLE.ADMIN
             ? "Admin Authenticated Successfully"
-            : resolvedRole === "Manager"
+            : resolvedRole === USER_ROLE.MANAGER
               ? "Manager Authenticated Successfully"
+              : resolvedRole === USER_ROLE.DELIVERY_PARTNER
+                ? "Delivery Partner Authenticated Successfully"
               : "User Authenticated Successfully";
         return res.status(200).json({
           message,
           user_authenticated: true,
           role: resolvedRole,
-          user: { username: user.username, email: user.email, role: resolvedRole },
+          accessToken: createAccessToken({ userId: user._id, role: resolvedRole, permissions: user.permissions || [] }),
+          user: { username: user.username, email: user.email, role: resolvedRole, permissions: user.permissions || [] },
         });
       } else {
         return res.status(200).json({
